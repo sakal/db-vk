@@ -5,6 +5,7 @@
 #include <deadbeef/deadbeef.h>
 #include <deadbeef/gtkui_api.h>
 #include <json-glib/json-glib.h>
+#include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
 
@@ -318,10 +319,28 @@ vk_get_my_music (GtkTreeModel *liststore) {
     http_tid = deadbeef->thread_start (vk_get_my_music_thread_func, liststore);
 }
 
+static ddb_gtkui_widget_t *
+w_vkbrowser_create (void) {
+    if (vk_auth_data == NULL) {
+		// not authenticated, show warning and that's it
+//		gdk_threads_enter();
+//		show_message (GTK_MESSAGE_WARNING,
+//		              "To be able to use VKontakte plugin you need to provide your\n"
+//		              "authentication details. Please visit plugin configuration.\n"
+//		              "Then you will be able to add tracks from VK.com");
+//		gdk_threads_leave();
+//		return FALSE;
+//	    TODO
+    }
+	
+    ddb_gtkui_widget_t *w = malloc (sizeof (ddb_gtkui_widget_t));
+    memset (w, 0, sizeof (ddb_gtkui_widget_t));
+    vk_setup_browser_widget (w);
+    return w;
+}
+
 static gboolean
 vk_action_gtk (void *data) {
-    GtkWidget *add_tracks_dlg;
-
 	if (vk_auth_data == NULL) {
 		// not authenticated, show warning and that's it
 		gdk_threads_enter();
@@ -333,17 +352,12 @@ vk_action_gtk (void *data) {
 		return FALSE;
 	}
 	
-    add_tracks_dlg = vk_create_add_tracks_dlg ();
-    gtk_widget_set_size_request (add_tracks_dlg, 400, 400);
-    gtk_window_set_transient_for (GTK_WINDOW (add_tracks_dlg),
-                                  GTK_WINDOW (gtkui_plugin->get_mainwin() ) );
-    gtk_widget_show (add_tracks_dlg);
+    gtk_widget_show (vk_create_browser_dialogue ());
     return FALSE;
 }
 
 static int
-vk_action_callback (DB_plugin_action_t *action,
-                    void *user_data) {
+vk_action_callback (DB_plugin_action_t *action, int ctx) {
 	g_idle_add (vk_action_gtk, NULL);
 	return 0;
 }
@@ -361,28 +375,26 @@ vk_config_changed() {
 
 static int
 vk_ddb_connect() {
-#if GTK_CHECK_VERSION(3,0,0)
-	gtkui_plugin = (ddb_gtkui_t *) deadbeef->plug_get_for_id ("gtkui3");
-#else
-	gtkui_plugin = (ddb_gtkui_t *) deadbeef->plug_get_for_id ("gtkui");
-#endif
+	gtkui_plugin = (ddb_gtkui_t *) deadbeef->plug_get_for_id (DDB_GTKUI_PLUGIN_ID);
 	
-	if (!gtkui_plugin) {
-		return -1;
-	}
-	
-	// set default UI options
-    vk_search_opts.filter_duplicates = (1 == deadbeef->conf_get_int (CONF_VK_UI_DEDUP, 1));
-    vk_search_opts.search_whole_phrase = (1 == deadbeef->conf_get_int (CONF_VK_UI_WHOLE_PHRASE, 1));
-    vk_search_opts.search_target = deadbeef->conf_get_int (CONF_VK_UI_TARGET, VK_TARGET_ANY_FIELD);
+	if (gtkui_plugin && gtkui_plugin->gui.plugin.version_major == 2) {  // gtkui version 2
+	    // set default UI options
+	    vk_search_opts.filter_duplicates = (1 == deadbeef->conf_get_int (CONF_VK_UI_DEDUP, 1));
+	    vk_search_opts.search_whole_phrase = (1 == deadbeef->conf_get_int (CONF_VK_UI_WHOLE_PHRASE, 1));
+	    vk_search_opts.search_target = deadbeef->conf_get_int (CONF_VK_UI_TARGET, VK_TARGET_ANY_FIELD);
 
-	return 0;
+
+        gtkui_plugin->w_reg_widget ("VK Browser", DDB_WF_SINGLE_INSTANCE, w_vkbrowser_create, "vkbrowser", NULL);
+        return 0;
+    }
+
+    return -1;
 }
 
 static DB_plugin_action_t vk_action = {
     .title = "File/Add tracks from VK",
     .name = "vk_add_tracks",
-    .flags = DB_ACTION_COMMON,
+    .flags = DB_ACTION_COMMON | DB_ACTION_ADD_MENU,
     .callback = vk_action_callback,
     .next = NULL,
 };
@@ -414,6 +426,9 @@ vk_ddb_message (uint32_t id, uintptr_t ctx, uint32_t p1, uint32_t p2) {
 static int
 vk_ddb_stop() {
     vk_auth_data_free(vk_auth_data);
+    if (gtkui_plugin) {
+//        gtkui_plugin->w_unreg_widget
+    }
     return 0;
 }
 
@@ -423,7 +438,7 @@ static const char vk_config_dlg[] =
 	
 DB_misc_t plugin = {
 	.plugin.api_vmajor = 1,
-	.plugin.api_vminor = 0,
+	.plugin.api_vminor = 5,
 	.plugin.type = DB_PLUGIN_MISC,
 	.plugin.version_major = 0,
 	.plugin.version_minor = 1,
@@ -434,9 +449,8 @@ DB_misc_t plugin = {
 #endif
 	.plugin.name = "VKontakte",
 	.plugin.descr = "Play music from VKontakte social network site.\n",
-	.plugin.copyright =
-	        "TODO (C) scorpp\n",
-	.plugin.website = "https://github.com/scorpp/db-vk",
+	.plugin.copyright = "Kirill Malyshev",
+	.plugin.website = "http://scorpp.github.io/db-vk/",
 	.plugin.configdialog = vk_config_dlg,
 	.plugin.stop = vk_ddb_stop,
 	.plugin.connect = vk_ddb_connect,
@@ -444,16 +458,12 @@ DB_misc_t plugin = {
 	.plugin.get_actions = vk_ddb_getactions,
 };
 
-#if GTK_CHECK_VERSION(3,0,0)
 DB_plugin_t *
+#if GTK_CHECK_VERSION(3,0,0)
 vkontakte_gtk3_load (DB_functions_t *api) {
+#else
+vkontakte_gtk2_load (DB_functions_t *api) {
+#endif
     deadbeef = api;
     return DB_PLUGIN (&plugin);
 }
-#else
-DB_plugin_t *
-vkontakte_gtk2_load (DB_functions_t *api) {
-	deadbeef = api;
-	return DB_PLUGIN (&plugin);
-}
-#endif
